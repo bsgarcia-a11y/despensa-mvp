@@ -3,111 +3,372 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Despensa MVP 0.2</title>
-<script src="https://unpkg.com/html5-qrcode"></script>
+<title>Despensa MVP 0.3</title>
+
 <style>
-body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;max-width:720px;margin:auto;padding:20px;background:#f5f5f7;color:#1d1d1f}
-button{font-size:18px;padding:14px 18px;border:0;border-radius:12px;background:#111;color:white;width:100%;margin:8px 0}
-.card{background:white;border-radius:16px;padding:16px;margin:12px 0}
-textarea{box-sizing:border-box;width:100%;padding:12px;font-size:15px;border:1px solid #ccc;border-radius:10px}
-#reader{background:white;border-radius:16px;overflow:hidden}
-.muted{color:#666;font-size:14px}.ok{color:#137333}.warn{color:#9a6700}.hidden{display:none}
-.secondary{background:#e8e8ed;color:#111}
+body{
+  font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
+  max-width:720px;
+  margin:auto;
+  padding:20px;
+  background:#f5f5f7;
+  color:#1d1d1f
+}
+
+.card{
+  background:white;
+  border-radius:16px;
+  padding:16px;
+  margin:12px 0
+}
+
+.item{
+  padding:12px 0;
+  border-bottom:1px solid #eee
+}
+
+.row{
+  display:flex;
+  justify-content:space-between;
+  gap:12px
+}
+
+button{
+  font-size:17px;
+  padding:14px;
+  border:0;
+  border-radius:12px;
+  background:#111;
+  color:white;
+  width:100%;
+  margin-top:12px
+}
+
+.muted{
+  color:#666;
+  font-size:14px
+}
+
+.ok{
+  color:#137333
+}
+
+.hidden{
+  display:none
+}
+
+.price{
+  font-weight:700
+}
 </style>
 </head>
+
 <body>
+
 <h1>Despensa</h1>
-<p>Protótipo 0.2 — NFC-e RJ → compra → despensa.</p>
+<p>Protótipo 0.3 — NFC-e → compra → despensa.</p>
 
-<div class="card">
-<button id="scan">Escanear NFC-e</button>
-<div id="reader"></div>
+<div id="compra" class="card hidden">
+
+  <div class="ok">
+    <b>Compra importada ✓</b>
+  </div>
+
+  <h2 id="mercado"></h2>
+
+  <div id="cnpj" class="muted"></div>
+
+  <div id="itens"></div>
+
+  <div class="row" style="margin-top:16px">
+    <b>Total dos itens</b>
+    <b id="total"></b>
+  </div>
+
+  <button id="add">
+    Adicionar à minha despensa
+  </button>
+
 </div>
 
-<div class="card">
-<b>QR identificado</b>
-<textarea id="qr" rows="4" placeholder="O conteúdo do QR aparecerá aqui"></textarea>
-<button id="process">Processar compra</button>
-<div id="status" class="muted"></div>
-</div>
+<div id="inicio" class="card">
 
-<div id="purchase" class="card hidden"></div>
+  <b>Minha despensa</b>
+
+  <p class="muted">
+    Abra a NFC-e no Safari e use o atalho de compartilhamento para enviar a compra.
+  </p>
+
+  <div id="estoque"></div>
+
+</div>
 
 <script>
-let scanner;
 
-function parseNfce(url){
+const esc = s =>
+  String(s ?? "").replace(
+    /[&<>"']/g,
+    c => ({
+      "&":"&amp;",
+      "<":"&lt;",
+      ">":"&gt;",
+      '"':"&quot;",
+      "'":"&#39;"
+    }[c])
+  );
+
+const numero = v =>
+  Number(
+    String(v ?? 0)
+      .replace(/\./g,"")
+      .replace(",",".")
+  ) || 0;
+
+const brl = v =>
+  numero(v).toLocaleString(
+    "pt-BR",
+    {
+      style:"currency",
+      currency:"BRL"
+    }
+  );
+
+
+function lerCompra(){
+
+  const parametros =
+    new URLSearchParams(location.search);
+
+  const dados =
+    parametros.get("dados") ||
+    parametros.get("compra");
+
+  if(!dados)
+    return null;
+
   try{
-    const u=new URL(url);
-    const p=u.searchParams.get('p');
-    if(!p) throw Error('Parâmetro p não encontrado');
-    const parts=decodeURIComponent(p).split('|');
-    if(parts.length<5) throw Error('Formato inesperado');
-    return {url,chave:parts[0],versao:parts[1],ambiente:parts[2],csc:parts[3],hash:parts[4]};
-  }catch(e){return {erro:e.message}}
-}
-
-async function tryRead(url){
-  try{
-    const res=await fetch(url,{credentials:'omit'});
-    if(!res.ok) throw Error('HTTP '+res.status);
-    return {ok:true,html:await res.text()};
-  }catch(e){return {ok:false,error:e.message}}
-}
-
-function extract(html){
-  const doc=new DOMParser().parseFromString(html,'text/html');
-  const text=(doc.body?.innerText||'').replace(/\u00a0/g,' ');
-  return text.slice(0,5000);
-}
-
-document.getElementById('scan').onclick=async()=>{
-  const status=document.getElementById('status');
-  try{
-    document.getElementById('reader').innerHTML='';
-    scanner=new Html5Qrcode('reader');
-    const cams=await Html5Qrcode.getCameras();
-    const cam=cams.find(c=>/back|traseira|environment/i.test(c.label))||cams[0];
-    await scanner.start(cam.id,{fps:10,qrbox:{width:250,height:250}},async text=>{
-      document.getElementById('qr').value=text;
-      await scanner.stop();
-      document.getElementById('reader').innerHTML='<p style="padding:12px" class="ok">QR Code lido ✓</p>';
-      document.getElementById('process').click();
-    });
-  }catch(e){
-    status.textContent='Erro ao abrir câmera: '+e.message;
+    return JSON.parse(dados);
   }
-};
+  catch(e){}
 
-document.getElementById('process').onclick=async()=>{
-  const r=parseNfce(document.getElementById('qr').value.trim());
-  const s=document.getElementById('status');
-  const p=document.getElementById('purchase');
-  p.classList.add('hidden');
+  try{
+    return JSON.parse(
+      decodeURIComponent(dados)
+    );
+  }
+  catch(e){}
 
-  if(r.erro){s.textContent='Erro: '+r.erro;return}
-  if(!r.chave.startsWith('33')){s.textContent='Esta versão testa apenas NFC-e do RJ.';return}
+  return null;
+}
 
-  s.innerHTML='<span class="ok">NFC-e RJ reconhecida ✓</span><br>Tentando ler os dados da compra no aparelho…';
 
-  const result=await tryRead(r.url);
+function mostrarEstoque(){
 
-  if(!result.ok){
-    s.innerHTML='<span class="warn"><b>Teste concluído:</b> o navegador conseguiu identificar a NFC-e, mas bloqueou a leitura automática da página da SEFAZ.</span><br><br>Isso normalmente ocorre pela política de segurança entre domínios (CORS).';
-    p.classList.remove('hidden');
-    p.innerHTML='<b>NFC-e identificada</b><p class="muted">Chave: '+r.chave+'</p><button id="open" class="secondary">Abrir nota na SEFAZ</button>';
-    document.getElementById('open').onclick=()=>location.href=r.url;
+  const produtos =
+    JSON.parse(
+      localStorage.getItem("despensa_itens")
+      || "[]"
+    );
+
+  const area =
+    document.getElementById("estoque");
+
+  if(!produtos.length){
+
+    area.innerHTML =
+      '<p class="muted">Nenhum produto adicionado ainda.</p>';
+
     return;
   }
 
-  const preview=extract(result.html);
-  s.innerHTML='<span class="ok">Página da NFC-e recebida ✓</span>';
-  p.classList.remove('hidden');
-  const ta=document.createElement('textarea');
-  ta.rows=12; ta.value=preview;
-  p.innerHTML='<b>Conteúdo recebido da SEFAZ</b><p class="muted">Se aparecerem os produtos abaixo, a leitura direta funcionou.</p>';
-  p.appendChild(ta);
-};
+  area.innerHTML =
+    produtos
+    .slice()
+    .reverse()
+    .map(item => `
+
+      <div class="item">
+
+        <b>
+          ${esc(item.produto)}
+        </b>
+
+        <div class="muted">
+          ${esc(item.quantidade)}
+          ${esc(item.unidade)}
+          ·
+          ${esc(item.mercado)}
+        </div>
+
+      </div>
+
+    `)
+    .join("");
+}
+
+
+function mostrarCompra(compra){
+
+  document
+    .getElementById("inicio")
+    .classList
+    .add("hidden");
+
+  document
+    .getElementById("compra")
+    .classList
+    .remove("hidden");
+
+
+  document.getElementById("mercado")
+    .textContent =
+      compra.mercado ||
+      "Estabelecimento";
+
+
+  document.getElementById("cnpj")
+    .textContent =
+      compra.cnpj
+      ? "CNPJ " + compra.cnpj
+      : "";
+
+
+  const produtos =
+    Array.isArray(compra.produtos)
+    ? compra.produtos
+    : [];
+
+
+  document.getElementById("itens")
+    .innerHTML =
+
+    produtos.map(item => `
+
+      <div class="item">
+
+        <div class="row">
+
+          <b>
+            ${esc(item.produto)}
+          </b>
+
+          <span class="price">
+            ${brl(item.valorTotal)}
+          </span>
+
+        </div>
+
+        <div class="muted">
+
+          ${esc(item.quantidade)}
+          ${esc(item.unidade)}
+
+          · unit.
+
+          ${brl(item.valorUnitario)}
+
+        </div>
+
+      </div>
+
+    `).join("");
+
+
+  const total =
+    produtos.reduce(
+      (soma,item) =>
+        soma + numero(item.valorTotal),
+      0
+    );
+
+
+  document.getElementById("total")
+    .textContent =
+      brl(total);
+
+
+  document.getElementById("add")
+    .onclick = () => {
+
+      const estoque =
+        JSON.parse(
+          localStorage.getItem(
+            "despensa_itens"
+          ) || "[]"
+        );
+
+
+      produtos.forEach(item => {
+
+        estoque.push({
+
+          ...item,
+
+          mercado:
+            compra.mercado || "",
+
+          cnpj:
+            compra.cnpj || ""
+
+        });
+
+      });
+
+
+      localStorage.setItem(
+        "despensa_itens",
+        JSON.stringify(estoque)
+      );
+
+
+      history.replaceState(
+        {},
+        "",
+        location.pathname
+      );
+
+
+      document
+        .getElementById("compra")
+        .classList
+        .add("hidden");
+
+
+      document
+        .getElementById("inicio")
+        .classList
+        .remove("hidden");
+
+
+      mostrarEstoque();
+
+
+      alert(
+        produtos.length +
+        " produto(s) adicionados à despensa."
+      );
+
+    };
+
+}
+
+
+const compra =
+  lerCompra();
+
+
+if(compra){
+
+  mostrarCompra(compra);
+
+}
+else{
+
+  mostrarEstoque();
+
+}
+
 </script>
+
 </body>
 </html>
